@@ -1,10 +1,13 @@
+#include <upc_relaxed.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
 
+#define MAX 10000000
 #define CONFIG "config"
 #define OUTPUT_FILENAME "output"
 #define MAX_STEP_COUNT 100
+#define ASD THREADS
 
 /*****************************************************************************/
 /* x = vx*t + x0;                                                            */
@@ -13,20 +16,24 @@
 /* v = (vx^2 + vy^2 + vz^2)^(1/2)                                            */
 /* v3 = (m1*v1 + m2*v2)/(m1 + m2)                                            */
 /*****************************************************************************/
+shared int will_clash = 0;
+shared char out_array[MAX_STEP_COUNT][64*THREADS];
+shared int x1[MAX_STEP_COUNT*THREADS];
+shared int y1[MAX_STEP_COUNT*THREADS];
+shared int z1[MAX_STEP_COUNT*THREADS];
+shared int x2[MAX_STEP_COUNT*THREADS];
+shared int y2[MAX_STEP_COUNT*THREADS];
+shared int z2[MAX_STEP_COUNT*THREADS];
 
 int main(int argc, char* argv[])
 {
-	int will_clash = 0;
-	int x1, y1, z1;
 	int x10, y10, z10;
 	int vx1, vy1, vz1;
-	int x2, y2, z2;
+	
 	int x20, y20, z20;
 	int vx2, vy2, vz2;
 	int m1, m2;
 	int i = 0;
-	
-	char out_array[MAX_STEP_COUNT][128];
 
 	
 	FILE * config;
@@ -37,11 +44,14 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 	FILE * out;
-	out = fopen(OUTPUT_FILENAME, "w");
-	if (NULL == out)
+	if (MYTHREAD == 0)
 	{
-		printf("can't open output file\n");
-		return -1;
+		out = fopen(OUTPUT_FILENAME, "w");
+		if (NULL == out)
+		{
+			printf("can't open output file\n");
+			return -1;
+		}
 	}
 	
 	
@@ -50,31 +60,26 @@ int main(int argc, char* argv[])
 	       "x0=%d y0=%d z0=%d vx=%d vy=%d vz=%d m=%d",
 	       &x10, &y10, &z10, &vx1, &vy1, &vz1, &m1,
 	       &x20, &y20, &z20, &vx2, &vy2, &vz2, &m2);
-	       
-	printf ("x0=%d y0=%d z0=%d vx=%d vy=%d vz=%d m=%d\n"
-	       "x0=%d y0=%d z0=%d vx=%d vy=%d vz=%d m=%d\n",
-	       x10, y10, z10, vx1, vy1, vz1, m1,
-	       x20, y20, z20, vx2, vy2, vz2, m2);
 	
-	for (i = 0; i < MAX_STEP_COUNT * 2; i++)
+	upc_forall (i = 0; i < MAX_STEP_COUNT * 2; i++; (i*THREADS)/(MAX_STEP_COUNT * 2))
 	{
 		if (i % 2 == 0)
 		{
-			x1 = vx1*i + x10;
-			y1 = vy1*i + y10;
-			z1 = vz1*i + z10;
+			x1[i/2] = vx1*i + x10;
+			y1[i/2] = vy1*i + y10;
+			z1[i/2] = vz1*i + z10;
 		}
 		else
 		{
-			x2 = vx2*(i-1) + x20;
-			y2 = vy2*(i-1) + y20;
-			z2 = vz2*(i-1) + z20;
+			x2[i/2] = vx2*(i-1) + x20;
+			y2[i/2] = vy2*(i-1) + y20;
+			z2[i/2] = vz2*(i-1) + z20;
 		}
 		
-		if (x1 == x2 && y1 == y2 && z1 == z2)
+		if (x1[i/2] == x2[i/2] && y1[i/2] == y2[i/2] && z1[i/2] == z2[i/2])
 			will_clash = i;
 	}
-	
+	usleep(1);
 	if (!will_clash)
 	{
 		printf("will not clash\n");
@@ -82,8 +87,9 @@ int main(int argc, char* argv[])
 	}
 	else
 	{
-		printf("will clash\n");
+		printf("will clash %d\n", will_clash);
 	}
+	return 0;
 	
 	int x3, y3, z3;
 	int x30, y30, z30;
@@ -124,17 +130,20 @@ int main(int argc, char* argv[])
 		x3 = vx3*i + x30;
 		y3 = vy3*i + y30;
 		z3 = vz3*i + z30;
-		sprintf(out_array[will_clash/2 + i], "%d %d %d\n", x3, y3, z3);
+		//sprintf(out_array[will_clash/2 + i], "%d %d %d\n", x3, y3, z3);
 	}
 	
-	for (i = 0; i < MAX_STEP_COUNT; i++)
+	if (MYTHREAD == 0)
 	{
-		fprintf(out, "%s", out_array[i]);
+		for (i = 0; i < MAX_STEP_COUNT; i++)
+		{
+			fprintf(out, "%s", out_array[i]);
+		}
 	}
-
 EXIT_LABEL:
 	fclose(config);
-	fclose(out);
+	if (MYTHREAD == 0)
+		fclose(out);
 	
 	return 0;	
 }
