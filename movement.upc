@@ -2,11 +2,12 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define MAX 10000000
 #define CONFIG "config"
 #define OUTPUT_FILENAME "output"
-#define MAX_STEP_COUNT 100
+#define MAX_STEP_COUNT 1000000
 #define ASD THREADS
 
 /*****************************************************************************/
@@ -17,16 +18,21 @@
 /* v3 = (m1*v1 + m2*v2)/(m1 + m2)                                            */
 /*****************************************************************************/
 shared int will_clash = 0;
-shared char out_array[MAX_STEP_COUNT][64*THREADS];
 shared int x1[MAX_STEP_COUNT*THREADS];
 shared int y1[MAX_STEP_COUNT*THREADS];
 shared int z1[MAX_STEP_COUNT*THREADS];
 shared int x2[MAX_STEP_COUNT*THREADS];
 shared int y2[MAX_STEP_COUNT*THREADS];
 shared int z2[MAX_STEP_COUNT*THREADS];
+shared int x3[MAX_STEP_COUNT*THREADS];
+shared int y3[MAX_STEP_COUNT*THREADS];
+shared int z3[MAX_STEP_COUNT*THREADS];
+shared int x30, y30, z30;
+shared int vx3, vy3, vz3;
 
 int main(int argc, char* argv[])
 {
+	clock_t start, end;
 	int x10, y10, z10;
 	int vx1, vy1, vz1;
 	
@@ -46,6 +52,7 @@ int main(int argc, char* argv[])
 	FILE * out;
 	if (MYTHREAD == 0)
 	{
+		start = clock();
 		out = fopen(OUTPUT_FILENAME, "w");
 		if (NULL == out)
 		{
@@ -89,61 +96,73 @@ int main(int argc, char* argv[])
 	{
 		printf("will clash %d\n", will_clash);
 	}
-	return 0;
 	
-	int x3, y3, z3;
-	int x30, y30, z30;
-	int vx3, vy3, vz3;
 	
-	for (i = 0; i <= will_clash; i++)
+	upc_forall (i = 0; i < will_clash; i++; (i*THREADS)/will_clash)
 	{
 		if (i % 2 == 0)
 		{
-			x1 = vx1*i + x10;
-			y1 = vy1*i + y10;
-			z1 = vz1*i + z10;
+			x1[i/2] = vx1*i + x10;
+			y1[i/2] = vy1*i + y10;
+			z1[i/2] = vz1*i + z10;
 		}
 		else
 		{
-			x2 = vx2*(i-1) + x20;
-			y2 = vy2*(i-1) + y20;
-			z2 = vz2*(i-1) + z20;
-			sprintf(out_array[i/2], "%d %d %d    %d %d %d\n",
-			        x1, y1, z1, x2, y2, z2);
+			x2[i/2] = vx2*(i-1) + x20;
+			y2[i/2] = vy2*(i-1) + y20;
+			z2[i/2] = vz2*(i-1) + z20;
 		}
 	}
 	
-	if (x1 != x2 || y1 != y2 || z1 != z2)
+	if (x1[i/2] == x2[i/2] ||
+	    y1[i/2] == y2[i/2] || 
+	    z1[i/2] == z2[i/2])
 	{
-		printf("error fail warning emergency\n");
-		goto EXIT_LABEL;
+		x30 = x1[i/2]; y30 = y1[i/2]; z30 = z1[i/2];
+		vx3 = (m1*vx1 + m2*vx2)/(m1 + m2);
+		vy3 = (m1*vy1 + m2*vy2)/(m1 + m2);
+		vz3 = (m1*vz1 + m2*vz2)/(m1 + m2);
 	}
+	usleep(1);
 	
-	x30 = x1; y30 = y1; z30 = z1;
-	vx3 = (m1*vx1 + m2*vx2)/(m1 + m2);
-	vy3 = (m1*vy1 + m2*vy2)/(m1 + m2);
-	vz3 = (m1*vz1 + m2*vz2)/(m1 + m2);
-	
-	
-	for (i = 1; i < (MAX_STEP_COUNT * 2 - will_clash) / 2; i++)
+	upc_forall (i = 1;
+	            i < (MAX_STEP_COUNT * 2 - will_clash) / 2;
+	            i++;
+	            (i*THREADS)/((MAX_STEP_COUNT * 2 - will_clash) / 2))
 	{
-		x3 = vx3*i + x30;
-		y3 = vy3*i + y30;
-		z3 = vz3*i + z30;
-		//sprintf(out_array[will_clash/2 + i], "%d %d %d\n", x3, y3, z3);
+		x3[i] = vx3*i + x30;
+		y3[i] = vy3*i + y30;
+		z3[i] = vz3*i + z30;
+	}
+	usleep(1);
+	if (MYTHREAD == 0)
+	{
+		end = clock();
+		double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+		printf("time1 = %f\n", cpu_time_used);
 	}
 	
 	if (MYTHREAD == 0)
 	{
 		for (i = 0; i < MAX_STEP_COUNT; i++)
 		{
-			fprintf(out, "%s", out_array[i]);
+			if (i <= will_clash/2)
+				fprintf(out, "%d %d %d    %d %d %d\n",
+				x1[i], y1[i], z1[i], x2[i], y2[i], z2[i]);
+			else
+				fprintf(out, "%d %d %d\n", x3[i-will_clash/2],
+				              y3[i-will_clash/2], z3[i-will_clash/2]);
 		}
 	}
 EXIT_LABEL:
 	fclose(config);
 	if (MYTHREAD == 0)
+	{
 		fclose(out);
+		end = clock();
+		double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+		printf("time2 = %f\n", cpu_time_used);
+	}
 	
 	return 0;	
 }
